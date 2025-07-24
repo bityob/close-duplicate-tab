@@ -1,259 +1,157 @@
-var stateChanged = true;
-var tabUrl = new Object();
-var urlList = new Object();
-var domains = [];
-var dupUrls = [];
+let tabUrl = {};
+let urlList = {};
+let domains = [];
+let dupUrls = [];
 
-var autoClose;
-var currentWindowOnly;
-var sortTabs;
+let autoClose = false;
+let currentWindowOnly = false;
+let sortTabs = false;
 
-function loadConfigs() {
-
-	chrome.storage.sync.get({
-		autoClose: false,
-		currentWindowOnly: false,
-		sortTabs: false
-	}, function (items) {
-		autoClose = items.autoClose;
-		currentWindowOnly = items.currentWindowOnly;
-		sortTabs = items.sortTabs;
-	});
+// Load options from storage
+async function loadConfigs() {
+  const items = await chrome.storage.sync.get({
+    autoClose: false,
+    currentWindowOnly: false,
+    sortTabs: false,
+  });
+  autoClose = items.autoClose;
+  currentWindowOnly = items.currentWindowOnly;
+  sortTabs = items.sortTabs;
 }
 
-function initTabUrl(tabs) {
-	tabUrl = new Object();
-
-	for (var i = 0; i < tabs.length; i++)
-		tabUrl[tabs[i].id] = { url: tabs[i].url, title: tabs[i].title };
+// Initialize tab tracking
+async function init() {
+  await loadConfigs();
+  const tabs = await chrome.tabs.query(currentWindowOnly ? { currentWindow: true } : {});
+  tabUrl = {};
+  for (const tab of tabs) {
+    tabUrl[tab.id] = { url: tab.url, title: tab.title };
+  }
+  refreshBadge();
 }
 
-function init() {
-
-	loadConfigs();
-
-	chrome.tabs.query({
-		// currentWindow: currentWindowOnly
-	}, function (tabs) {
-		initTabUrl(tabs);
-	});
-};
-
-function setIcon(type) {
-
-	if (type == 'inactive')
-		chrome.browserAction.setIcon({
-			path: "icon_128_gs.png"
-		});
-	else
-		chrome.browserAction.setIcon({
-			path: "icon_128.png"
-		});
-}
-
-function setBadge(msg) {
-
-	chrome.browserAction.setBadgeBackgroundColor({
-		color: [0, 0, 0, 0]
-	});
-
-	chrome.browserAction.setBadgeText({
-		text: msg
-	});
-
-}
-
-function setTitle(msg) {
-
-	chrome.browserAction.setTitle({
-		title: msg
-	})
-}
-
+// Update URL usage stats
 function updateUrlList() {
-
-	urlList = new Object();
-
-	for (var tabId in tabUrl) {
-
-		url = tabUrl[tabId].url;
-
-		if (url in urlList)
-			urlList[url].count += 1;
-		else
-			urlList[url] = { count: 1, title: tabUrl[tabId].title };
-	}
-
+  urlList = {};
+  for (const tabId in tabUrl) {
+    const url = tabUrl[tabId].url;
+    if (url in urlList) {
+      urlList[url].count += 1;
+    } else {
+      urlList[url] = { count: 1, title: tabUrl[tabId].title };
+    }
+  }
 }
 
+// Extract domain from URL
 function getDomain(url) {
-	return url.replace('http://','').replace('https://','').split(/[/?#]/)[0];
+  return url.replace(/^https?:\/\//, '').split(/[/?#]/)[0];
 }
 
+// Count domain frequencies
 function updateDomains() {
-	
-	domains = [];
-	var domainsList = new Object();
-
-	for (var url in urlList) {
-		var domain = getDomain(url);
-		if (domain in domainsList)
-			domainsList[domain] += 1;
-		else
-			domainsList[domain] = 1;
-	}
-
-	for (domain in domainsList) {
-		domains.push({ domain: domain, count: domainsList[domain] });
-	}
+  domains = [];
+  const domainMap = {};
+  for (const url in urlList) {
+    const domain = getDomain(url);
+    domainMap[domain] = (domainMap[domain] || 0) + 1;
+  }
+  for (const domain in domainMap) {
+    domains.push({ domain, count: domainMap[domain] });
+  }
 }
 
+// Build domain stats
 function getTopDomains() {
-	var topDomains = domains.sort(function(a, b) { return a.count - b.count; })
-		.reverse()
-		.filter(function(a) { return a.count >= 5; })
-		.map(function(a) { return a.count.toString().concat(" : ").concat(a.domain); });
-
-	if (topDomains.length > 0)
-		return "## Top Domains\n".concat(topDomains.join('\n')).concat('\n');
-	
-	return '';
+  return domains
+    .sort((a, b) => b.count - a.count)
+    .filter(d => d.count >= 5)
+    .map(d => `${d.count} : ${d.domain}`)
+    .join('\n');
 }
 
+// Set badge text and tooltip
 function refreshBadge() {
+  updateUrlList();
+  updateDomains();
 
-	if (!stateChanged) return;
+  let tabCount = 0;
+  let urlCount = 0;
+  dupUrls = [];
 
-	updateUrlList();
-	updateDomains();
+  for (const url in urlList) {
+    const count = urlList[url].count;
+    tabCount += count;
+    urlCount++;
+    if (count > 1) {
+      dupUrls.push(`${count} : ${urlList[url].title.slice(0, 50)}`);
+    }
+  }
 
-	var tabCount = 0;
-	var urlCount = 0;
-	dupUrls = [];
+  const diff = tabCount - urlCount;
+  const badgeText = diff > 0 ? diff.toString() : '';
+  const tooltip = `Tabs: ${tabCount} || Duplicates: ${diff}\n` +
+    (getTopDomains() ? `Top Domains:\n${getTopDomains()}\n` : '') +
+    (diff > 0 ? `Duplicate Sites:\n${dupUrls.sort().reverse().join('\n')}` : '');
 
-	for (var url in urlList) {
-		if (urlList[url] == undefined)
-			continue;
-
-		var count = urlList[url].count;
-		tabCount += count;
-		urlCount++;
-
-		if (count > 1)
-			dupUrls.push(count.toString().concat(" : ").concat(urlList[url].title.substr(0, 50)));
-			// dupUrls.push({})
-	}
-
-	var diff = tabCount - urlCount;
-
-	var title = 'Tabs: '.concat(tabCount.toString());
-	title = title.concat(' || Duplicates: ').concat(diff.toString()).concat('\n');
-	title = title.concat(getTopDomains());
-
-	if (diff > 0) {
-		setIcon('active');
-		setBadge(diff.toString());
-		setTitle(title.concat('## Duplicate sites\n').concat(dupUrls.sort().reverse().join('\n')));
-	} else {
-		setIcon('inactive');
-		setBadge('');
-		setTitle(title);
-	}
-
-	stateChanged = false;
+  chrome.action.setBadgeText({ text: badgeText });
+  chrome.action.setTitle({ title: tooltip });
 }
 
-chrome.runtime.onInstalled.addListener(function (details) {
-
-	init();
-
-	setInterval(function () { refreshBadge(); }, 500);
+// Handle tab updates
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  tabUrl[tabId] = { url: tab.url, title: tab.title };
+  refreshBadge();
 });
 
-chrome.runtime.onStartup.addListener(function (details) {
-
-	init();
-
-	setInterval(function () { refreshBadge(); }, 500);
+chrome.tabs.onRemoved.addListener((tabId) => {
+  delete tabUrl[tabId];
+  refreshBadge();
 });
 
-chrome.tabs.onUpdated.addListener(function (tabId, changeInfo, tab) {
-
-	tabUrl[tabId] = { url: tab.url, title: tab.title };
-
-	stateChanged = true;
+chrome.tabs.onReplaced.addListener((addedTabId, removedTabId) => {
+  delete tabUrl[removedTabId];
+  refreshBadge();
 });
 
-chrome.tabs.onRemoved.addListener(function (tabId, removeInfo) {
-
-	delete tabUrl[tabId];
-
-	stateChanged = true;
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName === 'sync') {
+    init();
+  }
 });
 
-chrome.tabs.onReplaced.addListener(function (addedTabId, removedTabId) {
+// Handle icon click
+chrome.action.onClicked.addListener(async () => {
+  await loadConfigs();
+  const tabs = await chrome.tabs.query(currentWindowOnly ? { currentWindow: true } : {});
 
-	delete tabUrl[removedTabId];
+  if (sortTabs) {
+    tabs.sort((a, b) => {
+      if (a.windowId !== b.windowId) return a.windowId - b.windowId;
+      return a.url.toLowerCase().localeCompare(b.url.toLowerCase());
+    });
+  }
 
-	stateChanged = true;
+  const urlMap = {};
+  for (const tab of tabs) {
+    const url = tab.url;
+    const existing = urlMap[url];
+    if (existing) {
+      if (!existing.pinned && (tab.pinned || tab.active)) {
+        await chrome.tabs.remove(existing.id);
+        urlMap[url] = tab;
+      } else {
+        await chrome.tabs.remove(tab.id);
+      }
+    } else {
+      urlMap[url] = tab;
+    }
+  }
+
+  // Rebuild state
+  await init();
 });
 
-chrome.storage.onChanged.addListener(function (changes, areaName) {
-
-	if (areaName == 'sync') {
-		init();
-
-		stateChanged = true;
-	}
-});
-
-chrome.browserAction.onClicked.addListener(function () {
-
-	console.log('onClick: ', autoClose, currentWindowOnly, sortTabs);
-
-	chrome.tabs.query({
-		// currentWindow: currentWindowOnly
-	}, function (tabs) {
-
-		if (sortTabs) {
-			tabs.sort(function (a, b) {
-				if (a.windowId != b.windowId)
-					return a.windowId - b.windowId;
-
-				return (a.url.toLowerCase() <= b.url.toLowerCase() ? -1 : 1);
-			});
-		}
-
-		var urls = new Object();
-		var newIndex = 0;
-		var winId = -1;
-
-		for (var i = 0; i < tabs.length; i++) {
-
-			if (sortTabs && winId != tabs[i].windowId) {
-				winId = tabs[i].windowId;
-				newIndex = 0;
-			}
-
-			var currentTab = tabs[i];
-			var url = currentTab.url;
-			var otherTab = urls[url];
-
-			if (url in urls) {
-
-				if (!otherTab.pinned && (currentTab.pinned || currentTab.active)) {
-					chrome.tabs.remove(otherTab.id);
-					urls[tabs[i].url] = currentTab;
-				} else
-					chrome.tabs.remove(currentTab.id);
-			} else {
-				urls[tabs[i].url] = currentTab;
-				if (sortTabs)
-					chrome.tabs.move(currentTab.id, { index: newIndex++ });
-			}
-
-		}
-
-		stateChanged = true;
-	});
-});
+// Startup/init
+chrome.runtime.onStartup.addListener(init);
+chrome.runtime.onInstalled.addListener(init);
