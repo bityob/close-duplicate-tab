@@ -4,6 +4,8 @@
 
 ✅ This is a **community-maintained, working version** of the original extension, fully updated to support **Manifest V3** and **modern Chrome APIs**.
 
+<img width="1196" height="325" alt="image" src="https://github.com/user-attachments/assets/7885c925-c720-4e2e-9be4-d16da27f3843" />
+
 ---
 
 ## 🔍 What it does
