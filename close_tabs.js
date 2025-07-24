@@ -7,7 +7,6 @@ let autoClose = false;
 let currentWindowOnly = false;
 let sortTabs = false;
 
-// Load options from storage
 async function loadConfigs() {
   const items = await chrome.storage.sync.get({
     autoClose: false,
@@ -19,7 +18,6 @@ async function loadConfigs() {
   sortTabs = items.sortTabs;
 }
 
-// Initialize tab tracking
 async function init() {
   await loadConfigs();
   const tabs = await chrome.tabs.query(currentWindowOnly ? { currentWindow: true } : {});
@@ -30,7 +28,6 @@ async function init() {
   refreshBadge();
 }
 
-// Update URL usage stats
 function updateUrlList() {
   urlList = {};
   for (const tabId in tabUrl) {
@@ -43,12 +40,10 @@ function updateUrlList() {
   }
 }
 
-// Extract domain from URL
 function getDomain(url) {
   return url.replace(/^https?:\/\//, '').split(/[/?#]/)[0];
 }
 
-// Count domain frequencies
 function updateDomains() {
   domains = [];
   const domainMap = {};
@@ -61,7 +56,6 @@ function updateDomains() {
   }
 }
 
-// Build domain stats
 function getTopDomains() {
   return domains
     .sort((a, b) => b.count - a.count)
@@ -70,7 +64,6 @@ function getTopDomains() {
     .join('\n');
 }
 
-// Set badge text and tooltip
 function refreshBadge() {
   updateUrlList();
   updateDomains();
@@ -89,19 +82,27 @@ function refreshBadge() {
   }
 
   const diff = tabCount - urlCount;
-  const badgeText = diff > 0 ? diff.toString() : '';
-  const tooltip = `Tabs: ${tabCount} || Duplicates: ${diff}\n` +
-    (getTopDomains() ? `Top Domains:\n${getTopDomains()}\n` : '') +
-    (diff > 0 ? `Duplicate Sites:\n${dupUrls.sort().reverse().join('\n')}` : '');
 
-  chrome.action.setBadgeText({ text: badgeText });
-  chrome.action.setTitle({ title: tooltip });
+  chrome.action.setBadgeText({ text: diff > 0 ? diff.toString() : '' });
+
+  chrome.action.setTitle({
+    title:
+      `Tabs: ${tabCount} || Duplicates: ${diff}\n` +
+      (getTopDomains() ? `Top Domains:\n${getTopDomains()}\n` : '') +
+      (diff > 0 ? `Duplicate Sites:\n${dupUrls.sort().reverse().join('\n')}` : '')
+  });
+
+  chrome.action.setIcon({
+    path: diff > 0 ? "icon_128.png" : "icon_128_gs.png"
+  });
 }
 
-// Handle tab updates
+// Listen to tab events
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  tabUrl[tabId] = { url: tab.url, title: tab.title };
-  refreshBadge();
+  if (tab.url) {
+    tabUrl[tabId] = { url: tab.url, title: tab.title };
+    refreshBadge();
+  }
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
@@ -120,7 +121,7 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
   }
 });
 
-// Handle icon click
+// Main click action
 chrome.action.onClicked.addListener(async () => {
   await loadConfigs();
   const tabs = await chrome.tabs.query(currentWindowOnly ? { currentWindow: true } : {});
@@ -148,10 +149,9 @@ chrome.action.onClicked.addListener(async () => {
     }
   }
 
-  // Rebuild state
   await init();
 });
 
-// Startup/init
+// On startup and install
 chrome.runtime.onStartup.addListener(init);
 chrome.runtime.onInstalled.addListener(init);
